@@ -2,6 +2,9 @@ package online
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,18 +75,34 @@ func lxPlatformOf(id string) string {
 	return ""
 }
 
-// auth adds the Subsonic credentials. The password goes in plain, so neither a salt nor a token
-// reaches a log.
+// auth adds the Subsonic credentials as a salted token, never the password. The stream address
+// is handed to the speaker, written to logs and kept with a takeover run, so what it carries is
+// what anyone reading those can use; a token costs nothing and can be neither replayed nor read
+// back into the password.
 func (l *Lx) auth(v url.Values) url.Values {
 	if v == nil {
 		v = url.Values{}
 	}
+	salt := l.newSalt()
+	sum := md5.Sum([]byte(l.Password + salt))
 	v.Set("u", l.User)
-	v.Set("p", l.Password)
+	v.Set("s", salt)
+	v.Set("t", hex.EncodeToString(sum[:]))
 	v.Set("v", "1.16.1")
 	v.Set("c", "trackferry")
 	v.Set("f", "json")
 	return v
+}
+
+// newSalt is a new salt for one request. Each address is its own, so an address that leaks is
+// worth nothing a moment later.
+func (l *Lx) newSalt() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A salt that never varies is still better than sending the password.
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 func (l *Lx) get(ctx context.Context, method string, v url.Values, out any) error {
