@@ -6,6 +6,7 @@
 package online
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -98,6 +99,10 @@ type Found struct {
 	Candidate Candidate
 	Stream    Stream
 	Near      bool // only if a character was misheard
+	// Unprobed is a stream taken as it is, without being asked what it holds. Its source
+	// vouches for it: the platforms hand out their own encodings (a 酷我 .mflac, a 酷狗 MP3
+	// under another name, an Ogg), which say nothing about whether the song will play.
+	Unprobed bool
 }
 
 // Health is a platform's recent record.
@@ -518,7 +523,7 @@ func (s *Service) resolve(ctx context.Context, e *entry, hs []hit) (*Found, stri
 		}
 		st, err := s.resolveOne(ctx, e.src, h.c)
 		if err == nil {
-			return &Found{Candidate: h.c, Stream: st, Near: h.near}, StateHit, ""
+			return &Found{Candidate: h.c, Stream: st, Near: h.near, Unprobed: unprobed(e.src)}, StateHit, ""
 		}
 		state, detail = StateError, describe(err)
 		switch {
@@ -578,17 +583,104 @@ type freely struct {
 
 func (f freely) Resolve(ctx context.Context, c Candidate) (string, error) { return f.resolve(ctx, c) }
 
+// unprobed reports that a source's addresses are taken as they are, without being read.
+func unprobed(src Source) bool {
+	v, ok := src.(interface{ Unprobed() bool })
+	return ok && v.Unprobed()
+}
+
+// tryOne takes a candidate's address from its source and, unless the source vouches for its
+// own bytes, probes it.
 func (s *Service) tryOne(ctx context.Context, src Source, c Candidate) (Stream, error) {
 	u, err := s.address(ctx, src, c)
 	if err != nil {
 		return Stream{}, err
 	}
-	return s.check(ctx, u, c.Duration)
+	if unprobed(src) {
+		// The source does not vouch for its bytes, so they are read here: a stream that is
+		// no audio is asked for again at another rate rather than sent to the speaker.
+		if _, ok := src.(interface {
+			ResolveAt(context.Context, Candidate, string) (string, error)
+		}); ok {
+			return s.lxCheck(ctx, src, c)
+		}
+		// The listing's own length: every platform claims one, and it need not hold.
+		return Stream{URL: u, Duration: c.Duration}, nil
+	}
+	return s.check(ctx, s.fetcher(src), u, c.Duration)
+}
+
+// lxFalls is the order 洛雪's streams are tried in when one turns out to hold no audio: its own
+// best form first, then the rates below it. Which one breaks a song is the platform's business
+// and differs from song to song, so each is asked until one plays.
+var lxFalls = []string{"", "320", "128"}
+
+// lxCheck proves a 洛雪 stream holds audio before the speaker is sent to it, falling through
+// lxFalls until one does. The platforms hand out their own encodings, and some songs at some
+// rates are no audio at all — an encrypted .mflac, or a cut file — which the speaker would
+// otherwise take and play as silence.
+func (s *Service) lxCheck(ctx context.Context, src Source, c Candidate) (Stream, error) {
+	at, ok := src.(interface {
+		ResolveAt(context.Context, Candidate, string) (string, error)
+	})
+	if !ok {
+		return Stream{}, errors.New("这个音源不能按码率取音频")
+	}
+	client := s.fetcher(src)
+	var lastErr error
+	for _, rate := range lxFalls {
+		u, err := at.ResolveAt(ctx, c, rate)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if ctx.Err() != nil {
+			return Stream{}, ctx.Err()
+		}
+		ok, err := s.plays(ctx, client, u)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if ok {
+			// The rate that worked, so a later address asks for it again.
+			return Stream{URL: u, Duration: c.Duration, Type: rate}, nil
+		}
+		lastErr = ErrNoAudio
+	}
+	if lastErr == nil {
+		lastErr = ErrNoAudio
+	}
+	return Stream{}, lastErr
+}
+
+// plays reports whether an address hands out audio the speaker can play. Only the first bytes
+// are read: a recognised container marker is what tells a song from the encrypted file a
+// platform sometimes answers with, which has no marker at all. A length is not insisted on —
+// the listing's own is what the run goes by, as for any unread stream.
+func (s *Service) plays(ctx context.Context, client *http.Client, u string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return false, httpError(resp.StatusCode)
+	}
+	head, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return audioHead(head), nil
 }
 
 // check probes an address: it must answer with audio about as long as the song.
-func (s *Service) check(ctx context.Context, u string, want time.Duration) (Stream, error) {
-	body, total, ctype, err := s.fetch(ctx, u, 0)
+func (s *Service) check(ctx context.Context, c *http.Client, u string, want time.Duration) (Stream, error) {
+	body, total, ctype, err := s.fetch(ctx, c, u, 0)
 	if err != nil {
 		return Stream{}, err
 	}
@@ -599,14 +691,14 @@ func (s *Service) check(ctx context.Context, u string, want time.Duration) (Stre
 			if n >= total {
 				return Stream{}, ErrNoAudio
 			}
-			if body, _, _, err = s.fetch(ctx, u, n); err != nil {
+			if body, _, _, err = s.fetch(ctx, c, u, n); err != nil {
 				return Stream{}, err
 			}
 		} else {
 			body = body[n:]
 		}
 	}
-	d := audio.MP3Duration(body, total-off)
+	d := audio.Duration(body, total-off)
 	if d == 0 {
 		return Stream{}, fmt.Errorf("%w（不是 MP3，类型 %.24q，%d 字节）", ErrNoAudio, ctype, total)
 	}
@@ -616,14 +708,14 @@ func (s *Service) check(ctx context.Context, u string, want time.Duration) (Stre
 	return Stream{URL: u, Duration: d, Type: ctype}, nil
 }
 
-func (s *Service) fetch(ctx context.Context, u string, from int64) (b []byte, total int64, ctype string, err error) {
+func (s *Service) fetch(ctx context.Context, c *http.Client, u string, from int64) (b []byte, total int64, ctype string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, 0, "", ErrNoAudio
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", from, from+32<<10-1))
-	resp, err := s.probe.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -677,7 +769,7 @@ func (s *Service) Opener(f *Found) func(ctx context.Context, rng string) (*http.
 			if rng != "" {
 				req.Header.Set("Range", rng)
 			}
-			resp, err := s.probe.Do(req)
+			resp, err := s.fetcher(src).Do(req)
 			if err == nil && (resp.StatusCode < 400 || resp.StatusCode == http.StatusRequestedRangeNotSatisfiable) {
 				return resp, nil
 			}
@@ -687,6 +779,16 @@ func (s *Service) Opener(f *Found) func(ctx context.Context, rng string) (*http.
 			}
 			if try > 0 || ctx.Err() != nil || src == nil {
 				return nil, err
+			}
+			if try == 0 && f.Unprobed {
+				// The address was taken without being read, so a refusal by it may be the
+				// platform's own file: look further before giving up on the song.
+				if alt, ok := s.alternate(ctx, f, u); ok {
+					mu.Lock()
+					u = alt
+					mu.Unlock()
+					continue
+				}
 			}
 			rctx, cancel := context.WithTimeout(ctx, totalBudget)
 			st, rerr := s.resolveOne(rctx, src, f.Candidate)
@@ -705,6 +807,64 @@ type httpError int
 
 func (e httpError) Error() string { return fmt.Sprintf("平台返回 HTTP %d", int(e)) }
 
+// looksAudio reads the first bytes of a whole-track answer and says whether they are an audio
+// container. The body is put back together, so a response that does hold audio is returned as
+// it came. head is what was read, for a log.
+func looksAudio(resp *http.Response) (head []byte, ok bool) {
+	if resp.Body == nil {
+		return nil, true // nothing to judge: leave it to the speaker
+	}
+	head, _ = io.ReadAll(io.LimitReader(resp.Body, 3<<10))
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
+	return head, audioHead(head)
+}
+
+// audioHead reports a recognised audio container from its first bytes.
+func audioHead(b []byte) bool {
+	if len(b) >= 4 {
+		switch string(b[:4]) {
+		case "fLaC", "OggS", "RIFF", "FORM":
+			return true
+		}
+		// An MP4 or M4A box: size, then "ftyp".
+		if len(b) >= 12 && string(b[4:8]) == "ftyp" {
+			return true
+		}
+	}
+	if len(b) >= 3 && string(b[:3]) == "ID3" {
+		return true
+	}
+	if len(b) >= 2 && b[0] == 0xff && b[1]&0xe0 == 0xe0 {
+		return true // an MPEG frame, whether MP3 or ADTS
+	}
+	return false
+}
+
+// alternate asks a song's own source for another address for it, when the one being played was
+// not read and the source found more than one form of the song. With none, the original stands.
+func (s *Service) alternate(ctx context.Context, f *Found, tried string) (string, bool) {
+	var src Source
+	for _, e := range s.srcs {
+		if e.src.Name() == f.Candidate.Source {
+			src = e.src
+		}
+	}
+	if src == nil {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(ctx, totalBudget)
+	defer cancel()
+	u, err := s.address(ctx, src, f.Candidate)
+	if err != nil || u == "" || u == tried {
+		return "", false
+	}
+	s.log.Info("音源　换一个音质再试", "音源", src.Name(), "歌曲", f.Candidate.Title)
+	return u, true
+}
+
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 // hosts are the only domains TrackFerry talks to, directly or through redirects.
@@ -721,20 +881,31 @@ func allowedHost(h string) bool {
 
 // Client returns the HTTP client for the platforms: it only reaches their own domains and
 // never a private address, whatever an answer or redirect says.
-func Client() *http.Client {
+func Client() *http.Client { return ClientWith(nil) }
+
+// ClientWith is Client that also reaches the hosts in extra. A source on this network, such as
+// a self-hosted server, needs its own address let through: only those exact addresses may be
+// private, and the platforms' own checks are untouched.
+func ClientWith(extra []string) *http.Client {
+	allowed := func(h string) bool {
+		if allowedHost(h) {
+			return true
+		}
+		return slices.Contains(extra, h)
+	}
 	d := &net.Dialer{Timeout: 3 * time.Second, Control: func(_, addr string, _ syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(addr)
 		if err != nil {
 			return err
 		}
-		if ip := ap.Addr().Unmap(); ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+		if ip := ap.Addr().Unmap(); (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast()) && !slices.Contains(extra, ip.String()) {
 			return errors.New("refusing a private address")
 		}
 		return nil
 	}}
 	tr := &http.Transport{DialContext: d.DialContext, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 4 * time.Second,
 		MaxIdleConnsPerHost: 4, IdleConnTimeout: time.Minute, ForceAttemptHTTP2: true}
-	return &http.Client{Transport: guard{tr}, CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+	return &http.Client{Transport: guard{tr, allowed}, CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 		if len(via) > 4 {
 			return errors.New("too many redirects")
 		}
@@ -742,10 +913,13 @@ func Client() *http.Client {
 	}}
 }
 
-type guard struct{ next http.RoundTripper }
+type guard struct {
+	next http.RoundTripper
+	ok   func(host string) bool
+}
 
 func (g guard) RoundTrip(r *http.Request) (*http.Response, error) {
-	if !allowedHost(r.URL.Hostname()) || r.URL.Scheme != "http" && r.URL.Scheme != "https" {
+	if !g.ok(r.URL.Hostname()) || r.URL.Scheme != "http" && r.URL.Scheme != "https" {
 		return nil, errors.New("host not allowed")
 	}
 	return g.next.RoundTrip(r)
@@ -853,7 +1027,96 @@ func (s *Service) Take(ctx context.Context, key string) (*Found, error) {
 			s.log.Warn("音源　点的歌放不了", "音源", c.Source, "原因", reason(err))
 			return nil, errors.New(describe(err))
 		}
-		return &Found{Candidate: c, Stream: st}, nil
+		return &Found{Candidate: c, Stream: st, Unprobed: unprobed(e.src)}, nil
 	}
 	return nil, ErrGone
+}
+
+// HTTPClient is a source that needs its own client: one on this network must reach a private
+// address the platforms' client refuses. Sources that do not implement it use the shared one.
+type HTTPClient interface{ HTTP() *http.Client }
+
+// fetcher returns the client that may reach src's audio.
+func (s *Service) fetcher(src Source) *http.Client {
+	if h, ok := src.(HTTPClient); ok {
+		if c := h.HTTP(); c != nil {
+			return c
+		}
+	}
+	return s.probe
+}
+
+// Lx returns the self-hosted 洛雪 source, or nil when it is not set up.
+func (s *Service) Lx() *Lx {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.srcs {
+		if l, ok := e.src.(*Lx); ok {
+			return l
+		}
+	}
+	return nil
+}
+
+// ClientForServer is the client for a source on this network, such as a self-hosted 洛雪
+// server. Besides reaching that address, it follows the server's redirect to a platform's own
+// address: the server does not relay online songs itself, it answers the stream request with
+// where the song is while its cache is cold. Only this client is that permissive.
+func ClientForServer(base string) *http.Client {
+
+	c := ClientWith(LxHosts(base))
+	cp := *c
+	cp.CheckRedirect = func(_ *http.Request, via []*http.Request) error {
+		if len(via) > 10 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	}
+	if g, ok := cp.Transport.(guard); ok {
+		g.ok = func(string) bool { return true } // the server sends us where the song is
+		cp.Transport = g
+	}
+	return &cp
+}
+
+// SetOrder puts the named platforms first, in this order, and the rest after them. Names that
+// are unknown are ignored, so a stale saved order never hides a platform.
+func (s *Service) SetOrder(names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var first, rest []*entry
+	for _, n := range names {
+		for _, e := range s.srcs {
+			if e.src.Name() == n && !slices.Contains(first, e) {
+				first = append(first, e)
+			}
+		}
+	}
+	for _, e := range s.srcs {
+		if !slices.Contains(first, e) {
+			rest = append(rest, e)
+		}
+	}
+	s.srcs = append(first, rest...)
+}
+
+// SetLx installs (or with nil removes) the self-hosted 洛雪 source, keeping its place in the
+// order and its switch. The page changes this without a restart.
+func (s *Service) SetLx(src Source) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, e := range s.srcs {
+		if e.src.Name() != "lx" {
+			continue
+		}
+		if src == nil {
+			s.srcs = append(s.srcs[:i], s.srcs[i+1:]...)
+			return
+		}
+		s.srcs[i].src = src
+		return
+	}
+	if src != nil {
+		s.srcs = append(s.srcs, &entry{src: src, enabled: true, h: Health{Source: src.Name()}})
+	}
 }

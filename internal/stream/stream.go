@@ -223,13 +223,48 @@ func (s *Server) Tone() (*Handle, error) {
 // Opener opens remote audio; rng is the speaker's Range header ("" = everything).
 type Opener func(ctx context.Context, rng string) (*http.Response, error)
 
-// Proxy registers remote MP3 audio, fetched on demand. The speaker never sees its address.
-func (s *Server) Proxy(open Opener, label string, d time.Duration) (*Handle, error) {
-	return s.register(proxied(open, label, d), ".mp3")
+// Proxy registers remote audio, fetched on demand. The speaker never sees its address. ctype is
+// the type asked for; when empty, the bytes themselves decide it, so an mp3 under another name
+// or an Ogg is not announced as something the speaker may refuse. d may be 0 when the length is
+// not known to be right.
+func (s *Server) Proxy(open Opener, label string, d time.Duration, ctype string) (*Handle, error) {
+	if ctype == "" {
+		open = sniffer(open)
+	}
+	return s.register(&item{h: &Handle{Label: label, Duration: d}, open: open, ctype: ctype}, ".mp3")
 }
 
+// proxied is remote audio as it was announced before the type was told: MP3.
 func proxied(open Opener, label string, d time.Duration) *item {
 	return &item{h: &Handle{Label: label, Duration: d}, open: open, ctype: "audio/mpeg"}
+}
+
+// sniffer makes an opener say what its first bytes are: the platforms hand out their own
+// encodings, and a name or a header is no sign of them.
+func sniffer(open Opener) Opener {
+	return func(ctx context.Context, rng string) (*http.Response, error) {
+		resp, err := open(ctx, rng)
+		if err != nil || rng != "" || resp.StatusCode != http.StatusOK || resp.Body == nil {
+			return resp, err
+		}
+		head, _ := io.ReadAll(io.LimitReader(resp.Body, 3<<10))
+		resp.Body.Close()
+		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), resp.Body))
+		resp.Header.Set("Content-Type", sniff(head))
+		return resp, nil
+	}
+}
+
+// sniff names the audio in the first bytes of a stream; unsniffable bytes are announced as a
+// binary file, which is what they were.
+func sniff(b []byte) string {
+	if len(b) >= 4 && (string(b[:4]) == "fLaC" || string(b[:4]) == "OggS") {
+		return map[bool]string{true: "audio/flac", false: "audio/ogg"}[string(b[:4]) == "fLaC"]
+	}
+	if len(b) >= 3 && string(b[:3]) == "ID3" || len(b) >= 2 && b[0] == 0xff && b[1]&0xe6 == 0xe2 {
+		return "audio/mpeg"
+	}
+	return "application/octet-stream"
 }
 
 // Song registers a library file whose play length is known (0 = unknown).

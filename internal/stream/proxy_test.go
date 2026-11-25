@@ -14,7 +14,7 @@ import (
 
 func proxyGet(t *testing.T, s *Server, open Opener, method, rng string) *httptest.ResponseRecorder {
 	t.Helper()
-	h, err := s.Proxy(open, "x", time.Minute)
+	h, err := s.Proxy(open, "x", time.Minute, "audio/mpeg")
 	if err != nil {
 		t.Fatal(err)
 	}

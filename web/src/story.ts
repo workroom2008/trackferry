@@ -27,7 +27,7 @@ function make(s: Omit<Story, 'landed' | 'failed' | 'end' | 'visits' | 'decided'>
     visits.push({ name: 'library', from: at, to: busy(lib) ? null : at + Math.max(lib.ms, 1), layer: lib });
     at += lib.ms;
   }
-  for (const n of ['kuwo', 'kugou', 'migu', 'netease'] as const) {
+  for (const n of ['lx', 'kuwo', 'kugou', 'migu', 'netease'] as const) {
     const l = layers[n];
     if (asked(l) || (l?.state === 'skipped' && l.ms > 0)) visits.push({ name: n, from: at, to: busy(l!) ? null : at + Math.max(l!.ms, 1), layer: l! });
   }
@@ -67,7 +67,7 @@ export function phase(s: Story, t: number): string {
   if (s.kind !== 'test' && s.kind !== 'push' && (s.decided === null || t < s.decided)) {
     const v = s.visits.filter((x) => t >= x.from && (x.to === null || t < x.to));
     if (v.some((x) => x.layer?.opinion)) return '曲库里有同名歌，正在问原唱是谁';
-    return v.length && s.visits.length ? `正在问${v.map((x) => ({ library: '曲库', kuwo: '酷我', kugou: '酷狗', migu: '咪咕', netease: '网易云', xiaomi: '小爱' })[x.name]).join('和')}` : '正在想';
+    return v.length && s.visits.length ? `正在问${v.map((x) => ({ library: '曲库', lx: '洛雪', kuwo: '酷我', kugou: '酷狗', migu: '咪咕', netease: '网易云', xiaomi: '小爱' })[x.name]).join('和')}` : '正在想';
   }
   if (s.route?.decision === 'native') return s.route.reason || '交给小爱';
   if (!s.run) return s.note || (s.route?.preview ? '只观察，没有出声' : s.open ? '准备音频' : '没有接管');

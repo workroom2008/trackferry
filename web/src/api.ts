@@ -117,7 +117,7 @@ export interface Command {
   route: Route | null;
 }
 
-export type LayerName = 'library' | 'kuwo' | 'kugou' | 'migu' | 'netease' | 'xiaomi';
+export type LayerName = 'library' | 'lx' | 'kuwo' | 'kugou' | 'migu' | 'netease' | 'xiaomi';
 export type LayerState = 'hit' | 'miss' | 'ambiguous' | 'restricted' | 'error' | 'timeout' | 'disabled' | 'open' | 'skipped' | 'asking';
 
 export interface Candidate {
@@ -142,7 +142,10 @@ export interface Route {
   preview: boolean;
   decision: 'local' | 'online' | 'native';
   reason?: string;
-  source?: 'library' | 'kuwo' | 'kugou' | 'migu' | 'netease';
+  source?: 'library' | 'lx' | 'kuwo' | 'kugou' | 'migu' | 'netease';
+  /** For 洛雪: the platform whose song this is, and its name. */
+  platform?: string;
+  platform_name?: string;
   title?: string;
   artist?: string;
   path?: string;
@@ -392,6 +395,7 @@ export const api = {
   artist: (name: string) => request<{ artist?: Artist; tracks: Track[] | null }>('GET', `/api/library/artist?name=${encodeURIComponent(name)}`),
   lyrics: (id: number) => request<{ track: Track; lyrics: string; offset_ms?: number }>('GET', `/api/library/tracks/${id}/lyrics`),
   setLyricsOffset: (id: number, offset_ms: number) => request<unknown>('PUT', `/api/library/tracks/${id}/lyrics`, { offset_ms }),
+  lxLyrics: (id: string) => request<{ lyrics: string }>('GET', `/api/lx/lyrics/${encodeURIComponent(id)}`),
   isFavorite: (id: number) => request<{ favorite: boolean }>('GET', `/api/library/tracks/${id}/favorite`),
   favorite: (id: number, on: boolean) => request<{ favorite: boolean }>('PUT', `/api/library/tracks/${id}/favorite`, { on }),
   playTrack: (id: string, track_id: number) => request<TakeoverRun>('POST', `/api/devices/${encodeURIComponent(id)}/takeover-test`, { source: 'track', track_id }),
@@ -418,6 +422,9 @@ export const api = {
   neteaseQR: () => request<NeteaseQR>('GET', '/api/sources/netease/qr'),
   neteaseCancel: () => request<void>('DELETE', '/api/sources/netease/qr'),
   setSource: (name: string, enabled: boolean) => request<{ sources: SourceHealth[] }>('PATCH', `/api/sources/${name}`, { enabled }),
+  setSourceOrder: (order: string[]) => request<{ sources: SourceHealth[] }>('PUT', '/api/sources/order', { order }),
+  lx: () => request<{ lx: LxSetting }>('GET', '/api/lx'),
+  saveLx: (url: string, user: string, password: string) => request<{ lx: LxSetting; sources: SourceHealth[] }>('PUT', '/api/lx', { url, user, password }),
   press: (id: string, action: Press, with_: { volume?: number; mode?: PlayMode; position?: number } = {}) => request<void>('POST', `/api/devices/${encodeURIComponent(id)}/control`, { action, ...with_ }),
   controls: (id: string) => request<Controls>('GET', `/api/devices/${encodeURIComponent(id)}/control`),
   queue: (id: string, from = 0) => request<Queue>('GET', `/api/devices/${encodeURIComponent(id)}/queue?from=${from}`).then((q) => {
@@ -449,3 +456,5 @@ export function captchaURL(rev: number) {
 export function qrImageURL(id: string) {
   return `/api/xiaomi/qr.png?id=${encodeURIComponent(id)}`;
 }
+
+export interface LxSetting { url: string; user: string; has_password: boolean; ready: boolean }

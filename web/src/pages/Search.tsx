@@ -30,8 +30,8 @@ const write = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.st
 const FEW = 8;
 let keptQ = '', keptAsked = '', keptSide: 'here' | 'online' = 'here';
 
-/** What the search page opens with: looked up online already. */
-export function lookFor(w: string) { keptQ = keptAsked = w; keptSide = 'online'; }
+/** What the search page opens with: the given side looked up already, online unless it says otherwise. */
+export function lookFor(w: string, online = true) { keptQ = w; keptAsked = online ? w : ''; keptSide = online ? 'online' : 'here'; }
 
 const low = (s: string) => s.toLowerCase().replace(/\s+/g, '');
 

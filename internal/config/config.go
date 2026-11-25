@@ -26,7 +26,20 @@ type Config struct {
 	Legacy []any `yaml:"devices"`
 	// UpdateCheck asks GitHub for newer releases.
 	UpdateCheck bool `yaml:"update_check"`
+	// Lx is a self-hosted 洛雪音乐 server, asked alongside the platforms for what they keep
+	// for members. Empty disables it.
+	Lx LxConfig `yaml:"lx"`
 }
+
+// LxConfig is the Subsonic endpoint of a 洛雪音乐 server.
+type LxConfig struct {
+	URL      string `yaml:"url"` // e.g. http://192.168.1.10:9527/rest
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+}
+
+// Ready reports whether the server is configured.
+func (l LxConfig) Ready() bool { return l.URL != "" && l.User != "" }
 
 // fromEnv lets compose.yaml carry the whole configuration.
 func (c *Config) fromEnv() {
@@ -51,6 +64,11 @@ func (c *Config) fromEnv() {
 		c.UpdateCheck = false
 	case "on", "true", "1":
 		c.UpdateCheck = true
+	}
+	set("TRACKFERRY_LX_URL", &c.Lx.URL)
+	set("TRACKFERRY_LX_USER", &c.Lx.User)
+	if v, ok := os.LookupEnv("TRACKFERRY_LX_PASSWORD"); ok {
+		c.Lx.Password = v
 	}
 }
 

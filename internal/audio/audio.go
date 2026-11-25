@@ -572,3 +572,34 @@ func FromName(rel string) (title, artist string) {
 	}
 	return strings.TrimSpace(base), ""
 }
+
+// Duration estimates the play length of an audio file whose first bytes are b, for the formats
+// the platforms and the speakers exchange; 0 when b does not say. A FLAC header carries its own
+// length, which an MP3's frames do not need read for.
+func Duration(b []byte, size int64) time.Duration {
+	if len(b) >= 4 && string(b[:4]) == "fLaC" {
+		return flacDuration(b)
+	}
+	return MP3Duration(b, size)
+}
+
+// flacDuration reads STREAMINFO, which every FLAC file starts with: 8 bytes of sizes, then 64
+// bits holding a 20-bit sample rate, 3-bit channels, 5-bit depth and 36-bit sample count.
+func flacDuration(b []byte) time.Duration {
+	const off = 4 // STREAMINFO is the first block of every FLAC file
+	if off+19 > len(b) || b[off]&0x7f != 0 { // 0: STREAMINFO
+		return 0
+	}
+	body := b[off+4:] // STREAMINFO itself starts after the 4-byte block header
+	if len(body) < 18 {
+		return 0
+	}
+	// The 64 bits from body[10]: 20 bits of rate, 3 of channels, 5 of depth, 36 of samples.
+	x := binary.BigEndian.Uint64(body[10:])
+	rate := x >> 44
+	n := x & (1<<36 - 1)
+	if rate == 0 || n == 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second / time.Duration(rate)
+}

@@ -13,6 +13,12 @@ takeover_speakers: ["*"]
 # 去 GitHub 看有没有新版本（TRACKFERRY_UPDATE_CHECK）
 update_check: true
 
+# 自己部署的洛雪音乐：填了就和其他平台一起找歌（TRACKFERRY_LX_URL 等）
+# lx:
+#   url: "http://192.168.1.10:9527/rest"
+#   user: "admin"
+#   password: ""
+
 # 容器内的目录，一般不用改
 data_dir: /data
 music_dir: /music

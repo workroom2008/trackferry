@@ -1,7 +1,7 @@
 import type { Candidate, Layer, LayerName, LayerState, Route, RunOutcome, TakeoverRun } from './api';
 
-export const stops: LayerName[] = ['library', 'kuwo', 'kugou', 'migu', 'netease', 'xiaomi'];
-export const stopLabel: Record<LayerName, string> = { library: '曲库', kuwo: '酷我', kugou: '酷狗', migu: '咪咕', netease: '网易云', xiaomi: '小爱' };
+export const stops: LayerName[] = ['library', 'lx', 'kuwo', 'kugou', 'migu', 'netease', 'xiaomi'];
+export const stopLabel: Record<LayerName, string> = { library: '曲库', lx: '洛雪', kuwo: '酷我', kugou: '酷狗', migu: '咪咕', netease: '网易云', xiaomi: '小爱' };
 
 const stateLabel: Record<LayerState, string> = {
   hit: '有', miss: '没有', ambiguous: '同名', restricted: '会员', error: '出错', timeout: '超时', disabled: '已关', open: '暂停', skipped: '', asking: '在问',
@@ -91,7 +91,7 @@ export function landedAt(run: TakeoverRun) {
 
 /** Counts where requests ended. */
 export function tally(routes: (Route | null)[]) {
-  const n: Record<LayerName, number> = { library: 0, kuwo: 0, kugou: 0, migu: 0, netease: 0, xiaomi: 0 };
+  const n: Record<LayerName, number> = { library: 0, lx: 0, kuwo: 0, kugou: 0, migu: 0, netease: 0, xiaomi: 0 };
   for (const r of routes) if (r) n[r.decision === 'native' ? 'xiaomi' : (r.source ?? 'library')]++;
   return n;
 }
@@ -100,4 +100,12 @@ export function tally(routes: (Route | null)[]) {
 export function pushed(run?: TakeoverRun | null): Route | null {
   const s = run?.song;
   return s ? { preview: false, decision: 'local', source: 'library', ms: 0, layers: [], track_id: s.track_id, list: s.list, title: s.title, artist: s.artist, album: s.album, cover: s.cover, duration_ms: s.duration_ms } as unknown as Route : null;
+}
+
+/** What played, in words the page can show: 洛雪's songs name the platform they came from. */
+export function playedBy(r: Route | null | undefined): string {
+  if (!r) return stopLabel.library;
+  const base = stopLabel[r.source ?? 'library'];
+  if (r.source === 'lx' && r.platform_name) return `${base}·${r.platform_name}`;
+  return base;
 }

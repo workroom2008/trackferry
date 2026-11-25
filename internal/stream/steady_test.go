@@ -58,7 +58,7 @@ func breaking(t *testing.T, data []byte, chunk int, stall, ranges bool) (Opener,
 
 func fetch(t *testing.T, open Opener, rng string) (*http.Response, []byte, error) {
 	s := New("http://nas", t.TempDir())
-	h, err := s.Proxy(open, "x", 0)
+	h, err := s.Proxy(open, "x", 0, "audio/mpeg")
 	if err != nil {
 		t.Fatal(err)
 	}

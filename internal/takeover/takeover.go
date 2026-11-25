@@ -69,6 +69,9 @@ type Request struct {
 	Trace      *live.Trace // tells the web UI; optional
 	// Follows: our own last song just ended, so there is nothing to silence first.
 	Follows bool
+	// Quiet: the song is nowhere to be had, so the speaker is stopped and left silent rather
+	// than letting Xiao AI play its own version of it. No audio is pushed.
+	Quiet bool
 	Answer  int // characters Xiao AI says
 	// Ended is called once the run is over; optional.
 	Ended func(End)
@@ -103,6 +106,7 @@ const (
 	StepStatus    = "status"    // read player state and volume
 	StepMute      = "mute"      // volume to 0
 	StepStop1     = "stop1"     // first pause + stop
+	StepQuiet     = "quiet"     // nothing was found: the speaker is stopped and left silent
 	StepWait      = "wait"      // for Xiao AI to finish what she says
 	StepStop2     = "stop2"     // second pause + stop after settle
 	StepPlay      = "play"      // pushed our stream
@@ -527,6 +531,15 @@ func (e *Engine) execute(ctx context.Context, req Request, run *store.TakeoverRu
 	}
 	if cancelled() {
 		return
+	}
+
+	// Nothing to play: Xiao AI's answer is stopped, and her own version of a song it could not
+	// be given here must not be heard either. The volume goes back with the run, as for any
+	// request that ends without a song of ours playing.
+	if req.Quiet {
+		r.step(StepQuiet, true, "曲库和线上都没有，停住不出声")
+		finish(store.OutcomeFailed, "曲库和线上都没有这首歌，没有出声")
+		return EndUnplayed
 	}
 
 	e.deepened(dev)

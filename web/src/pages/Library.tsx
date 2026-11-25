@@ -15,6 +15,9 @@ import { songPicture, useBackdrop } from '../stage/Stage';
 
 type Nav = (p: Place, from?: Element | null) => void;
 
+/** Whether the library's search box looks online too; kept across visits. */
+const ONLINE = 'trackferry.search.online';
+
 export function Library({ place, devices, navigate }: { place: Place; devices: Device[]; navigate: Nav }) {
   if (place.kind === 'album') return <AlbumPage key={place.id} id={place.id!} devices={devices} navigate={navigate} />;
   if (place.kind === 'artist') return <ArtistPage key={place.id} name={place.id!} devices={devices} navigate={navigate} />;
@@ -229,6 +232,8 @@ function Front({ devices, navigate }: { devices: Device[]; navigate: Nav }) {
   const [lib, setLib] = useState<LibraryStatus | null>(keptLib);
   const [fn, setFn] = useState<FeiniuInfo | null>(keptFn);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState('');
+  const [online, setOnline] = useState(() => { try { return localStorage.getItem(ONLINE) === '1'; } catch { return false; } });
   const lead = shelf?.newest?.find((a) => a.cover) ?? shelf?.wall?.[0];
   useBackdrop(lead ? songPicture({ title: lead.name, artist: lead.artist, cover: lead.cover }) : undefined);
 
@@ -288,10 +293,22 @@ function Front({ devices, navigate }: { devices: Device[]; navigate: Nav }) {
       <header className="lib-head">
         <h1><span className="num">{n(running ? Math.max(lib.seen, lib.tracks) : lib.tracks)}</span> 首歌</h1>
         <p className="lib-sub">{running ? '正在从飞牛音乐同步' : <>{shelf && shelf.albums > 0 && <>{n(shelf.albums)} 张专辑，</>}{n(lib.artists)} 位歌手{fn.feiniu.linked && <>，来自飞牛音乐</>}</>}</p>
-        <a className="lib-search glass" href="#/search" onClick={(e) => { e.preventDefault(); navigate({ page: 'search' }); }}>
-          <svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M13 13l5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
-          <span>歌名、歌手、专辑</span>
-        </a>
+        <form className="lib-search glass" role="search" onSubmit={(e) => {
+          e.preventDefault();
+          const w = q.trim();
+          if (!w) { navigate({ page: 'search' }); return; }
+          lookFor(w, online);
+          navigate({ page: 'search' });
+        }}>
+          <label>
+            <svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M13 13l5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+            <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={online ? '回车搜在线源' : '歌名、歌手、专辑'} enterKeyHint="search" aria-label="搜索曲库和在线源" maxLength={100} autoComplete="off" />
+          </label>
+          <label className="lib-online" title="勾上后回车，直接搜在线源">
+            <input type="checkbox" checked={online} onChange={(e) => { setOnline(e.target.checked); try { localStorage.setItem(ONLINE, e.target.checked ? '1' : ''); } catch { /* for this visit only */ } }} />
+            在线源
+          </label>
+        </form>
       </header>
       {error && <Notice tone="error" title={error} />}
       {(!fn.feiniu.linked || fn.feiniu.expired) && (

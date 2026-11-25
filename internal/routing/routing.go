@@ -57,6 +57,9 @@ type Route struct {
 	TrackID    int64    `json:"track_id,omitempty"`
 	Cover      string   `json:"cover,omitempty"`
 	Album      string   `json:"album,omitempty"`
+	// Platform and PlatformName say which platform an online song came from, for the page.
+	Platform     string `json:"platform,omitempty"`
+	PlatformName string `json:"platform_name,omitempty"`
 	DurationMS int64    `json:"duration_ms,omitempty"`
 	List       string   `json:"list,omitempty"`   // the list that plays on after it
 	Others     []string `json:"others,omitempty"` // other singers of the same title in the library
@@ -102,15 +105,36 @@ type Router struct {
 
 // Preference keys.
 const settingPrefix = "source."
+const settingOrder = "source.order"
 
-// LoadSettings applies stored source switches.
+// LoadSettings applies a stored order and the stored source switches.
 func (r *Router) LoadSettings(ctx context.Context, st *store.Store) {
+	// The order first: it decides which platform is tried before the others.
+	if v, err := st.Setting(ctx, settingOrder); err == nil && v != "" {
+		var names []string
+		for _, n := range strings.Split(v, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				names = append(names, n)
+			}
+		}
+		r.Online.SetOrder(names)
+	}
 	for _, h := range r.health() {
 		if v, err := st.Setting(ctx, settingPrefix+h.Source); err == nil && v != "" {
 			r.Online.SetEnabled(h.Source, v == "on")
 		}
 	}
 }
+
+// SetSourceOrder stores the order the platforms are asked in and applies it at once.
+func (r *Router) SetSourceOrder(ctx context.Context, st *store.Store, names []string) error {
+	if r.Online == nil {
+		return nil
+	}
+	r.Online.SetOrder(names)
+	return st.SetSetting(ctx, settingOrder, strings.Join(names, ","))
+}
+
 
 // SetSource switches an online source and remembers it.
 func (r *Router) SetSource(ctx context.Context, st *store.Store, name string, on bool) (bool, error) {
@@ -131,7 +155,6 @@ func (r *Router) health() []online.Health {
 	return r.Online.Health()
 }
 
-// Readings lists the ways to understand a song request, most literal last.
 func Readings(in intent.Intent) []online.Reading {
 	out := []online.Reading{{Title: in.Title, Artist: in.Artist}}
 	if in.Artist != "" {
@@ -145,8 +168,27 @@ func Readings(in intent.Intent) []online.Reading {
 			out = append(out[:2], online.Reading{Title: strings.Join(f[1:], " "), Artist: f[0]}, online.Reading{Title: in.Title})
 		}
 	}
+	// No space to split on, and the whole phrase reads as a title: "岛岛的风的轮廓" is 岛岛's
+	// 风的轮廓. Every 的 is tried, the longest singer name first, and the plain title last.
+	if len(out) == 1 {
+		rs := []rune(in.Title)
+		var readings []online.Reading
+		for i := 1; i < len(rs)-1; i++ {
+			if rs[i] != '的' {
+				continue
+			}
+			artist, title := string(rs[:i]), string(rs[i+1:])
+			if len([]rune(artist)) < 1 || len([]rune(title)) < 1 {
+				continue
+			}
+			readings = append(readings, online.Reading{Title: title, Artist: artist})
+		}
+		slices.Reverse(readings) // longest singer name first
+		out = append(readings, out...)
+	}
 	return out
 }
+
 
 // Decide routes a recognised command.
 func (r *Router) Decide(ctx context.Context, in intent.Intent, query string) *Route {
@@ -281,20 +323,29 @@ func (r *Router) Decide(ctx context.Context, in intent.Intent, query string) *Ro
 	return rt
 }
 
+
 func (rt *Route) takeOnline(f *online.Found) {
 	c := f.Candidate
 	rt.Decision, rt.Source, rt.Title, rt.Artist, rt.found = Online, c.Source, c.Title, c.Artist, f
+	// The online source keeps the picture and the words: the page fetches them by this id.
+	if online.IsOnlineID(c.ID) {
+		rt.Cover = c.ID
+	}
+	rt.Platform, rt.PlatformName = online.PlatformOf(c.ID), online.LxName(online.PlatformOf(c.ID))
 	rt.DurationMS = f.Stream.Duration.Milliseconds()
+	if f.Unprobed {
+		rt.DurationMS = c.DurationMS // the listing's, as nothing was read to check it
+	}
 }
-
 func layer(o online.Outcome) Layer {
+
 	l := Layer{Name: o.Source, State: o.State, MS: o.MS, Detail: o.Detail, Candidates: []Candidate{}}
 	for _, c := range o.Candidates {
 		d := c.Why
 		if d == "" && c.Restricted {
 			d = "要会员"
 		}
-		l.Candidates = append(l.Candidates, Candidate{Title: c.Title, Artist: c.Artist, Detail: d, DurationMS: c.DurationMS})
+		l.Candidates = append(l.Candidates, Candidate{Title: c.Title, Artist: c.Artist, Detail: d, DurationMS: c.DurationMS, Cover: onlineCover(c.ID)})
 	}
 	return l
 }
@@ -611,4 +662,12 @@ func (r *Route) Label() string {
 // ForTest is an online route for other packages' tests.
 func ForTest(title, artist string) *Route {
 	return &Route{Decision: Online, Source: "kuwo", Title: title, Artist: artist, Layers: []Layer{}, found: &online.Found{}}
+}
+
+// onlineCover is the picture id of an online song: only a source with its own ids has one.
+func onlineCover(id string) string {
+	if online.IsOnlineID(id) {
+		return id
+	}
+	return ""
 }

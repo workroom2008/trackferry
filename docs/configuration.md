@@ -8,6 +8,9 @@
 | `TRACKFERRY_TAKEOVER` | `takeover_speakers` | 空 | 允许设为接管的音箱，名字的一部分，逗号分隔；`*` 为全部；空为一台都不允许 |
 | `TRACKFERRY_LISTEN` | `listen` | `:18561` | 监听地址与端口。只监听一个地址时写成 `192.168.1.10:18561` |
 | `TRACKFERRY_UPDATE_CHECK` | `update_check` | 开 | `off` 关闭定时检查新版本；页面上的手动检查仍可用 |
+| `TRACKFERRY_LX_URL` | `lx.url` | 空 | 自己部署的洛雪音乐（LX Music 服务端）的 Subsonic 地址，如 `http://192.168.1.10:9527/rest`。填了才会用它一起找歌 |
+| `TRACKFERRY_LX_USER` | `lx.user` | 空 | 洛雪账号 |
+| `TRACKFERRY_LX_PASSWORD` | `lx.password` | 空 | 洛雪账号的密码 |
 | 无，在管理页设置 | 无 | 直接连接 | 更新代理，“设置 → 关于”，只用于检查和下载更新 |
 | `TRACKFERRY_LOG` | 无 | 文字 | `json` 输出机器可读的日志 |
 | `TRACKFERRY_DEBUG` | 无 | 关 | 任意值打开调试日志，包含每个页面请求 |

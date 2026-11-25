@@ -47,6 +47,7 @@ type Options struct {
 	Store         *store.Store
 	Token         string // bearer token for scripts
 	SetupCodePath string // file holding the one-time code that authorises the first admin password
+	LxFile        string // where a 洛雪 server set in the page is kept
 	Build         Build
 	Boot          store.Boot
 	Xiaomi        *xiaomi.Manager
@@ -214,12 +215,16 @@ func (s *Server) Handler() http.Handler {
 		authed("GET /api/library/playlists/{guid}", s.libraryPlaylist)
 		authed("GET /api/library/online", s.librarySearchOnline)
 		authed("GET /api/library/tracks/{id}/lyrics", s.libraryLyrics)
+		authed("GET /api/lx/lyrics/{id}", s.lxLyrics)
 		authed("POST /api/route/try", s.routeTry)
 		authed("GET /api/intent", s.intentGuide)
 		authed("POST /api/intent", s.intentExplain)
 		authed("GET /api/library/tracks/{id}/favorite", s.isFavorite)
 		authed("PUT /api/library/tracks/{id}/favorite", s.favorite)
 		authed("PATCH /api/sources/{name}", s.sourceUpdate)
+		authed("PUT /api/sources/order", s.sourceOrder)
+		authed("GET /api/lx", s.lxStatus)
+		authed("PUT /api/lx", s.lxSave)
 		if s.Netease != nil {
 			authed("GET /api/sources/netease/account", s.neteaseAccount)
 			authed("DELETE /api/sources/netease/account", s.neteaseLogout)

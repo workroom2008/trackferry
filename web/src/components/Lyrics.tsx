@@ -5,23 +5,27 @@ import { position, type Sounding } from '../live';
 import { lineAt, parseLRC, plainLyrics, type Line } from '../lyrics';
 import { Fish } from './Fish';
 import { useToast } from './Toast';
+import { Blast, nextKind, type BlastKind } from './BlastLine';
 
 export interface Words { lines: Line[]; timed: boolean; /** How much sooner the lines come, in ms. */ offset: number; setOffset: (ms: number) => void }
 
-/** The words of a library song; null until they are known, or when there are none. */
-export function useWords(trackID?: number): Words | null {
-  const [got, setGot] = useState<{ id: number; lines: Line[]; timed: boolean; offset: number } | null>(null);
+/** The words of a song: a library song by its id, an online one by the source's id ("kw_12").
+ *  A library song has its own time nudge; an online one only has the words. */
+export function useWords(trackID?: number, onlineID?: string): Words | null {
+  const key = onlineID ? `o:${onlineID}` : trackID ? `l:${trackID}` : '';
+  const [got, setGot] = useState<{ id: string; lines: Line[]; timed: boolean; offset: number } | null>(null);
   const later = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
-    if (!trackID) return;
+    if (!key) return;
     let on = true;
-    api.lyrics(trackID).then((r) => {
+    const p = onlineID ? api.lxLyrics(onlineID) : api.lyrics(trackID!);
+    p.then((r: { lyrics: string; offset_ms?: number }) => {
       if (!on) return;
       const lines = parseLRC(r.lyrics ?? '');
-      setGot({ id: trackID, lines: lines.length ? lines : plainLyrics(r.lyrics ?? ''), timed: lines.length > 0, offset: r.offset_ms ?? 0 });
+      setGot({ id: key, lines: lines.length ? lines : plainLyrics(r.lyrics ?? ''), timed: lines.length > 0, offset: r.offset_ms ?? 0 });
     }).catch(() => {});
     return () => { on = false; };
-  }, [trackID]);
+  }, [key, trackID, onlineID]);
   const setOffset = useCallback((ms: number) => {
     if (!trackID) return;
     const to = Math.max(-60000, Math.min(60000, ms));
@@ -29,14 +33,14 @@ export function useWords(trackID?: number): Words | null {
     clearTimeout(later.current);
     later.current = setTimeout(() => { api.setLyricsOffset(trackID, to).catch(() => {}); }, 500); // several taps are one change
   }, [trackID]);
-  return trackID && got?.id === trackID && got.lines.length ? { lines: got.lines, timed: got.timed, offset: got.offset, setOffset } : null;
+  return key && got?.id === key && got.lines.length ? { lines: got.lines, timed: got.timed, offset: got.offset, setOffset } : null;
 }
 
 const SIZE = 'trackferry.lyrics.size';
 const sizes = [{ v: 'small', label: '小' }, { v: '', label: '中' }, { v: 'large', label: '大' }];
 
 /** All of the words. The line being sung stays in view unless the reader has scrolled away; a tap on a line goes there. */
-export function LyricSheet({ words, now, big, seek }: { words: Words; now: Sounding | null; big: boolean; seek?: (ms: number) => void }) {
+export function LyricSheet({ words, now, big, seek, blast }: { words: Words; now: Sounding | null; big: boolean; seek?: (ms: number) => void; blast?: boolean }) {
   const box = useRef<HTMLOListElement>(null);
   const hands = useRef(0);
   const [i, setI] = useState(-1);
@@ -45,6 +49,16 @@ export function LyricSheet({ words, now, big, seek }: { words: Words; now: Sound
   const [size, setSize] = useState(() => { try { return localStorage.getItem(SIZE) ?? ''; } catch { return ''; } });
   const { lines, timed, offset } = words;
   const follow = !!now && timed;
+  // The effect changes every line: the next kind is drawn once per new line, never the same twice.
+  const [kind, setKind] = useState<BlastKind>('shatter');
+  const lastKind = useRef<BlastKind | null>(null);
+  const live = !!blast && big && i >= 0 && !!lines[i];
+  useEffect(() => {
+    if (i < 0) return;
+    const k = nextKind(lastKind.current);
+    lastKind.current = k;
+    setKind(k);
+  }, [i]);
   useEffect(() => {
     if (!follow) { setI(-1); return; }
     const f = () => {
@@ -61,14 +75,36 @@ export function LyricSheet({ words, now, big, seek }: { words: Words; now: Sound
     b.scrollTo({ top: i < 0 ? 0 : el.offsetTop + el.offsetHeight / 2 - b.clientHeight * .42, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   }, [i, big, size, follow, free]);
   useEffect(() => { hands.current = 0; setFree(false); }, [lines]);
+  // Which character of the line is being sung: the line's own span, walked by the clock.
+  const [sung, setSung] = useState(-1);
+  const sungNow = () => {
+    if (!live || !follow) return -1;
+    const cur = lines[i];
+    const next = lines[i + 1];
+    const from = cur.at - offset;
+    const to = next ? next.at - offset : from + Math.max(2400, Array.from(cur.text).length * 260);
+    if (to <= from) return -1;
+    const f = (position(now!) - from) / (to - from);
+    if (f < 0) return -1;
+    const n = Array.from(cur.text).length;
+    return Math.min(n - 1, Math.floor(f * n));
+  };
+  useEffect(() => {
+    if (!live) { setSung(-1); return; }
+    const t = setInterval(() => setSung(sungNow()), 90);
+    setSung(sungNow());
+    return () => clearInterval(t);
+  }, [live, i, now?.phase, now?.at, now?.since]); // eslint-disable-line react-hooks/exhaustive-deps
   const mine = () => { hands.current = Date.now(); if (follow) setFree(true); };
   const go = (l: Line) => { hands.current = 0; setFree(false); seek!(Math.max(0, l.at - offset)); };
   const jump = timed && seek;
   const sized = (v: string) => { setSize(v); try { localStorage.setItem(SIZE, v); } catch { /* for this visit only */ } };
   return (
     <div className={`lyric ${size ? `lyric-${size}` : ''}`}>
-      <ol ref={box} className={`sheet-words ${follow ? 'follow' : ''} ${free ? 'free' : ''} ${jump ? 'jump' : ''}`} aria-label="歌词" tabIndex={0} onWheel={mine} onTouchMove={mine} onKeyDown={mine}>
-        {lines.map((l, k) => <li key={k} className={k === i ? 'now' : ''} aria-current={k === i || undefined} onClick={jump ? () => go(l) : undefined} style={{ '--d': follow ? Math.min(5, Math.abs(k - Math.max(i, 0))) : 0 } as React.CSSProperties}>{l.text}</li>)}
+      <ol ref={box} className={`sheet-words ${follow ? 'follow' : ''} ${free ? 'free' : ''} ${jump ? 'jump' : ''} ${live ? 'blasting' : ''}`} aria-label="歌词" tabIndex={0} onWheel={mine} onTouchMove={mine} onKeyDown={mine}>
+        {lines.map((l, k) => <li key={k} className={k === i ? 'now' : ''} aria-current={k === i || undefined} onClick={jump ? () => go(l) : undefined} style={{ '--d': follow ? Math.min(5, Math.abs(k - Math.max(i, 0))) : 0 } as React.CSSProperties}>
+          {live && k === i ? <Blast text={l.text} seed={k} kind={kind} sung={sung} /> : l.text}
+        </li>)}
       </ol>
       {tools ? (
         <div className="lyric-tools" role="group" aria-label="调整歌词">
