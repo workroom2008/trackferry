@@ -1,0 +1,88 @@
+name: sync-upstream
+
+# Keeps this repository's main identical to madrays/trackferry's. Nothing of ours lives on main:
+# our own changes are on feature branches, which are rebased onto it.
+#
+# When the two have diverged the sync stops and opens an issue instead of rewriting anything:
+# main is a mirror, and a forced update is only safe while it is one.
+
+on:
+  schedule:
+    - cron: '17 18 * * *' # 02:17 in Beijing
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  UPSTREAM: madrays/trackferry
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --tags upstream main
+
+      - name: Compare
+        id: cmp
+        run: |
+          up=$(git rev-parse upstream/main)
+          echo "upstream=$up" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$up" HEAD; then
+            echo "state=current" >> "$GITHUB_OUTPUT"
+          elif git merge-base --is-ancestor HEAD "$up"; then
+            echo "state=behind" >> "$GITHUB_OUTPUT"
+            echo "note=$(git describe --tags --abbrev=0 "$up" 2>/dev/null || git rev-parse --short "$up")" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=diverged" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fast-forward main
+        if: steps.cmp.outputs.state == 'behind'
+        run: |
+          git merge --ff-only "${{ steps.cmp.outputs.upstream }}"
+          git push origin main
+          git push --tags origin
+
+      - name: Say what changed
+        if: steps.cmp.outputs.state == 'behind'
+        run: echo "main fast-forwarded to ${{ steps.cmp.outputs.note }}"
+
+      # main is meant to be a mirror. Anything of ours on it means a commit went to the wrong
+      # branch; an issue says so, and the sync leaves it alone rather than discarding it.
+      - name: Warn when main is no longer a mirror
+        if: steps.cmp.outputs.state == 'diverged'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="main 与上游分叉了"
+          body=$(cat <<'EOF'
+          `main` 应当与上游 `madrays/trackferry` 完全一致，本次同步发现两边各有对方没有的提交，因此没有改动它。
+
+          处理办法：
+
+          ```bash
+          git fetch origin main upstream
+          git log --oneline origin/main ^upstream/main   # 只在 main 上的
+          ```
+
+          - 如果这些提交该属于某个特性分支，把它们移到那里（`git cherry-pick`），再把 main 重置为上游。
+          - 如果是有意为之，请把本工作流里的同步关掉，否则每天都会再报一次。
+          EOF
+          )
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq 'length')
+          if [ "$n" = "0" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          else
+            echo "已有未处理的同类 issue，不再新建"
+          fi
