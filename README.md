@@ -217,3 +217,19 @@ docker compose -f compose.yaml -f compose.build.yaml up -d --build
 感谢 [xiaomusic](https://github.com/hanxi/xiaomusic)、[fnmusic-miot](https://github.com/le5inioo/fnmusic-miot)、[songloft-plugin-miot](https://github.com/songloft-org/songloft-plugin-miot)、[fnos_music_ext](https://github.com/javycoder/fnos_music_ext) 和 [musicdl](https://github.com/CharlesPikachu/musicdl)。
 
 TrackFerry 以 [MIT](LICENSE) 许可开源。
+
+### 本分支的来源
+
+本仓库是 [madrays/trackferry](https://github.com/madrays/trackferry) 的衍生版本，版权归原作者 madrays 所有，依 MIT 许可使用。
+
+在原版基础上，本仓库增加了以下功能（详见 `git log`）：
+
+- 接入自建的洛雪音乐（LX Music）服务端，作为在线音源之一
+- 曲库和线上都没有的歌，让音箱停下并保持安静，不交给小爱自己找版本
+- 歌名相差一个字时也能对上（如「雨中的恋人」与「雨中的恋人们」）
+- 歌词逐字特效
+
+`main` 分支与本仓库无关，它是上游的镜像，请以 `feature/trackferry-plus` 为准。
+
+**请注意**：上述改动未经上游作者审核，也不代表上游的立场。上游已明确表示不接入第三方解析脚本，洛雪音源属于此类，因此这些改动只在本仓库维护，不会合并回上游。
+

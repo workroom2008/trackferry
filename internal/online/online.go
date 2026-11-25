@@ -1066,10 +1066,14 @@ func ClientForServer(base string) *http.Client {
 
 	c := ClientWith(LxHosts(base))
 	cp := *c
-	cp.CheckRedirect = func(_ *http.Request, via []*http.Request) error {
+	cp.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) > 10 {
 			return errors.New("too many redirects")
 		}
+		// The address this follows carries the server's password in its query. Go would send it
+		// on as the Referer of the request to the platform's CDN, which is a third party: the
+		// password would go with it. Dropped here, and the new address keeps nothing of it.
+		req.Header.Del("Referer")
 		return nil
 	}
 	if g, ok := cp.Transport.(guard); ok {
