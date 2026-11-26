@@ -48,7 +48,9 @@ import (
 var (
 	version = "dev"
 	commit  = "unknown"
-	repo    = "madrays/trackferry" // where releases are published
+	// This fork's own releases, not upstream's: its versions are behind ours from 1.6.1 on, so
+	// asking it would always answer that there is nothing new.
+	repo = "workroom2008/trackferry" // where releases are published
 )
 
 func main() {
