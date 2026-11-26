@@ -62,9 +62,13 @@ func NewClient(ep Endpoints) *Client {
 
 // transport keeps connections warm for several speakers read every second, and notices a
 // connection that silently died (router restart, changed line) instead of waiting on it.
+//
+// No proxy: the speakers are on this network and Xiaomi's services are domestic. The proxy the
+// owner may set is for reaching GitHub and nothing else (see package update); reading one from
+// the environment here would send these calls through it.
 func transport() *http.Transport {
 	return &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
+		Proxy:               nil,
 		DialContext:         (&net.Dialer{Timeout: 4 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 4 * time.Second,
 		ForceAttemptHTTP2:   true,
